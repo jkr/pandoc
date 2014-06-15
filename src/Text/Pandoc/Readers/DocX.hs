@@ -344,6 +344,9 @@ spanRemove = concatMap spanRemove'
 
 spanTrim' :: Inline -> [Inline]
 spanTrim' il@(Span _ []) = [il]
+spanTrim' il@(Span attr (il':[]))
+  | il' == Space = [Span attr [], Space]
+  | otherwise = [il]
 spanTrim' (Span attr ils)
   | head ils == Space && last ils == Space =
     [Space, Span attr (init $ tail ils), Space]
