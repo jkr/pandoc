@@ -75,7 +75,8 @@ module Text.Pandoc.Readers.DocX
 import Codec.Archive.Zip
 import Text.Pandoc.Definition
 import Text.Pandoc.Options
-import Text.Pandoc.Builder (text, toList)
+import Text.Pandoc.Builder (toList, Inlines, Blocks)
+import qualified Text.Pandoc.Builder as B
 import Text.Pandoc.Generic (bottomUp)
 import Text.Pandoc.MIME (getMimeType)
 import Text.Pandoc.UTF8 (toString)
@@ -84,12 +85,13 @@ import Text.Pandoc.Readers.DocX.Lists
 import Data.Maybe (mapMaybe, isJust, fromJust)
 import Data.List (delete, isPrefixOf, (\\), intersect)
 import qualified Data.ByteString as BS
-import qualified Data.ByteString.Lazy as B
+import qualified Data.ByteString.Lazy as BL
 import Data.ByteString.Base64 (encode)
 import System.FilePath (combine)
+import Data.Monoid
 
 readDocX :: ReaderOptions
-         -> B.ByteString
+         -> BL.ByteString
          -> Pandoc
 readDocX opts bytes =
   case archiveToDocX (toArchive bytes) of
@@ -119,9 +121,6 @@ parStyleToDivAttr pPr = ("",
                             Nothing -> []
                          )
 
-strToInlines :: String -> [Inline]
-strToInlines = toList . text
-
 codeSpans :: [String]
 codeSpans = ["VerbatimChar"]
 
@@ -131,9 +130,12 @@ blockQuoteDivs = ["Quote", "BlockQuote"]
 codeDivs :: [String]
 codeDivs = ["SourceCode"]
 
-runElemToInlines :: RunElem -> [Inline]
-runElemToInlines (TextRun s) = strToInlines s
-runElemToInlines (LnBrk) = [LineBreak]
+runElemToInlines :: RunElem -> Inlines
+runElemToInlines (TextRun s) = B.text s
+runElemToInlines (LnBrk) = B.linebreak
+
+runElemsToInlines :: [RunElem] -> Inlines
+runElemsToInlines = mconcat . (map runElemToInlines)
 
 runElemToString :: RunElem -> String
 runElemToString (TextRun s) = s
@@ -142,50 +144,48 @@ runElemToString (LnBrk) = ['\n']
 runElemsToString :: [RunElem] -> String
 runElemsToString = concatMap runElemToString
 
-strNormalize :: [Inline] -> [Inline]
-strNormalize [] = []
-strNormalize (Str "" : ils) = strNormalize ils
-strNormalize ((Str s) : (Str s') : l) = strNormalize ((Str (s++s')) : l)
-strNormalize (il:ils) = il : (strNormalize ils)
+runsToInlines :: ReaderOptions -> DocX -> [Run] -> Inlines
+runsToInlines o d rs = mconcat $ map (runToInlines o d) rs 
 
-runToInlines :: ReaderOptions -> DocX -> Run -> [Inline]
+runToInlines :: ReaderOptions -> DocX -> Run -> Inlines
 runToInlines _ _ (Run rs runElems) 
   | isJust (rStyle rs) && (fromJust (rStyle rs)) `elem` codeSpans =
     case runStyleToSpanAttr rs == ("", [], []) of
-      True -> [Str (runElemsToString runElems)]
-      False -> [Span (runStyleToSpanAttr rs) [Str (runElemsToString runElems)]]
+      True -> B.str (runElemsToString runElems)
+      False -> B.spanWith (runStyleToSpanAttr rs) (B.str (runElemsToString runElems))
   | otherwise = case runStyleToSpanAttr rs == ("", [], []) of
-      True -> concatMap runElemToInlines runElems
-      False -> [Span (runStyleToSpanAttr rs) (concatMap runElemToInlines runElems)]
+      True ->  runElemsToInlines runElems
+      False -> B.spanWith (runStyleToSpanAttr rs) (runElemsToInlines runElems)
 runToInlines opts docx@(DocX _ notes _ _ _ ) (Footnote fnId) =
   case (getFootNote fnId notes) of
     Just bodyParts ->
-      [Note [Div ("", ["footnote"], []) (map (bodyPartToBlock opts docx) bodyParts)]]
+      B.note $ B.divWith ("", ["footnote"], []) (bodyPartsToBlock opts docx bodyParts)
     Nothing        ->
-      [Note [Div ("", ["footnote"], []) []]]
+      B.note $ B.divWith ("", ["footnote"], []) mempty
 runToInlines opts docx@(DocX _ notes _ _ _) (Endnote fnId) =
   case (getEndNote fnId notes) of
     Just bodyParts ->
-      [Note [Div ("", ["endnote"], []) (map (bodyPartToBlock opts docx) bodyParts)]]
+      B.note $ B.divWith ("", ["endnote"], []) (bodyPartsToBlock opts docx bodyParts)
     Nothing        ->
-      [Note [Div ("", ["endnote"], []) []]]
+      B.note $ B.divWith ("", ["endnote"], []) mempty
 
-parPartToInlines :: ReaderOptions -> DocX -> ParPart -> [Inline]
+
+parPartToInlines :: ReaderOptions -> DocX -> ParPart -> Inlines
 parPartToInlines opts docx (PlainRun r) = runToInlines opts docx r
 parPartToInlines _ _ (BookMark _ anchor) =
-  [Span (anchor, ["anchor"], []) []]
+  B.spanWith (anchor, ["anchor"], []) mempty
 parPartToInlines _ (DocX _ _ _ rels _) (Drawing relid) =
   case lookupRelationship relid rels of
-    Just target -> [Image [] (combine "word" target, "")]
-    Nothing     -> [Image [] ("", "")]
+    Just target -> B.image (combine "word" target) "" mempty
+    Nothing     -> B.image "" "" mempty
 parPartToInlines opts docx (InternalHyperLink anchor runs) =
-  [Link (concatMap (runToInlines opts docx) runs) ('#' : anchor, "")]
+  B.link  ('#' : anchor)  "" (runsToInlines opts docx runs)
 parPartToInlines opts docx@(DocX _ _ _ rels _) (ExternalHyperLink relid runs) =
   case lookupRelationship relid rels of
     Just target ->
-      [Link (concatMap (runToInlines opts docx) runs) (target, "")]
+      B.link target "" (runsToInlines opts docx runs)
     Nothing ->
-      [Link (concatMap (runToInlines opts docx) runs) ("", "")]
+      B.link "" "" (runsToInlines opts docx runs) 
 
 isAnchorSpan :: Inline -> Bool
 isAnchorSpan (Span (ident, classes, kvs) ils) =
@@ -205,7 +205,7 @@ makeHeaderAnchors h@(Header n (_, classes, kvs) ils) =
 makeHeaderAnchors blk = blk
   
 
-parPartsToInlines :: ReaderOptions -> DocX -> [ParPart] -> [Inline]
+parPartsToInlines :: ReaderOptions -> DocX -> [ParPart] -> Inlines
 parPartsToInlines opts docx parparts =
   --
   -- We're going to skip data-uri's for now. It should be an option,
@@ -215,17 +215,20 @@ parPartsToInlines opts docx parparts =
   bottomUp spanCorrect $
   bottomUp spanTrim $
   bottomUp spanReduce $
-  concatMap (parPartToInlines opts docx) parparts
+  mconcat $ map (parPartToInlines opts docx) parparts
 
-cellToBlocks :: ReaderOptions -> DocX -> Cell -> [Block]
-cellToBlocks opts docx (Cell bps) = map (bodyPartToBlock opts docx) bps
+cellToBlocks :: ReaderOptions -> DocX -> Cell -> Blocks
+cellToBlocks opts docx (Cell bps) = mconcat $ map (bodyPartToBlock opts docx) bps
 
-rowToBlocksList :: ReaderOptions -> DocX -> Row -> [[Block]]
+rowToBlocksList :: ReaderOptions -> DocX -> Row -> [Blocks]
 rowToBlocksList opts docx (Row cells) = map (cellToBlocks opts docx) cells
 
-bodyPartToBlock :: ReaderOptions -> DocX -> BodyPart -> Block
+bodyPartsToBlock :: ReaderOptions -> DocX -> [BodyPart] -> Blocks
+bodyPartsToBlock o d bs = mconcat $ map (bodyPartToBlock o d) bs
+
+bodyPartToBlock :: ReaderOptions -> DocX -> BodyPart -> Blocks
 bodyPartToBlock opts docx (Paragraph pPr parparts) =
-  Div (parStyleToDivAttr pPr) [Para (parPartsToInlines opts docx parparts)]
+  B.divWith (parStyleToDivAttr pPr) (B.para $ parPartsToInlines opts docx parparts)
 bodyPartToBlock opts docx@(DocX _ _ numbering _ _) (ListItem pPr numId lvl parparts) =
   let
     kvs = case lookupLevel numId lvl numbering of
@@ -243,13 +246,13 @@ bodyPartToBlock opts docx@(DocX _ _ numbering _ _) (ListItem pPr numId lvl parpa
                                         ]
       Nothing                        -> []
   in
-   Div
+   B.divWith
    ("", ["list-item"], kvs)
-   [bodyPartToBlock opts docx (Paragraph pPr parparts)]
+   (bodyPartToBlock opts docx (Paragraph pPr parparts))
 bodyPartToBlock _ _ (Tbl _ _ _ []) =
-  Para []
+  B.para mempty -- Does this do something or can it be replaced with mempty?
 bodyPartToBlock opts docx (Tbl cap _ look (r:rs)) =
-  let caption = strToInlines cap
+  let caption = B.str cap
       (hdr, rows) = case firstRowFormatting look of
         True -> (Just r, rs)
         False -> (Nothing, r:rs)
@@ -270,14 +273,14 @@ bodyPartToBlock opts docx (Tbl cap _ look (r:rs)) =
       alignments = take size (repeat AlignDefault)
       widths = take size (repeat 0) :: [Double]
   in
-   Table caption alignments widths hdrCells cells
+   B.table caption (zip alignments widths) hdrCells cells
 
 makeImagesSelfContained :: DocX -> Inline -> Inline
 makeImagesSelfContained (DocX _ _ _ _ media) i@(Image alt (uri, title)) =
   case lookup uri media of
     Just bs -> case getMimeType uri of
       Just mime ->  let data_uri =
-                          "data:" ++ mime ++ ";base64," ++ toString (encode $ BS.concat $ B.toChunks bs)
+                          "data:" ++ mime ++ ";base64," ++ toString (encode $ BS.concat $ BL.toChunks bs)
                     in
                      Image alt (data_uri, title)
       Nothing  -> i
@@ -287,7 +290,6 @@ makeImagesSelfContained _ inline = inline
 bodyToBlocks :: ReaderOptions -> DocX -> Body -> [Block]
 bodyToBlocks opts docx (Body bps) =
   bottomUp removeEmptyPars $
-  bottomUp strNormalize $ 
   bottomUp spanRemove $ 
   bottomUp divRemove $
   map (makeHeaderAnchors) $
@@ -296,7 +298,7 @@ bodyToBlocks opts docx (Body bps) =
   bottomUp divCorrectPreReduce $
   bottomUp blocksToDefinitions $
   blocksToBullets $
-  map (bodyPartToBlock opts docx) bps
+  toList $ mconcat $ map (bodyPartToBlock opts docx) bps
 
 docxToBlocks :: ReaderOptions -> DocX -> [Block]
 docxToBlocks opts d@(DocX (Document _ body) _ _ _ _) = bodyToBlocks opts d body
