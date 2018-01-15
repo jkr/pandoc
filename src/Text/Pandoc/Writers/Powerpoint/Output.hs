@@ -612,6 +612,7 @@ createCaption contentShapeDimensions paraElements = do
                      , txBody
                      ]
 
+
 makePicElements :: PandocMonad m
                 => Element
                 -> PicProps
@@ -635,15 +636,32 @@ makePicElements layout picProps mInfo alt = do
 
   let cy = if hasCaption then cytmp - captionHeight else cytmp
 
-  let imgRatio = fromIntegral pxX / fromIntegral pxY :: Double
-      boxRatio = fromIntegral cx / fromIntegral cy :: Double
-      (dimX, dimY) = if imgRatio > boxRatio
-                     then (fromIntegral cx, fromIntegral cx / imgRatio)
-                     else (fromIntegral cy * imgRatio, fromIntegral cy)
+  let (dimX, dimY) =
+        let imgRatio = fromIntegral pxX / fromIntegral pxY :: Double
+            boxRatio = fromIntegral cx / fromIntegral cy :: Double
+        in case () of
+             _ | Just (Percent xPct) <- picWidth picProps
+               , Just (Percent yPct) <- picHeight picProps ->
+                   let x' = (fromIntegral pageWidth) * xPct / 100
+                       y' = (fromIntegral pageHeight) * yPct / 100
+                   in
+                     (x', y')
+             _ | Just (Percent xPct) <- picWidth picProps ->
+                   let x' = (fromIntegral pageWidth) * xPct / 100
+                   in
+                     (x', x'/imgRatio)
+             _ | Just (Percent yPct) <- picHeight picProps ->
+                   let y' = (fromIntegral pageHeight) * yPct / 100
+                   in
+                     (y' * imgRatio, y')
+             _ -> if imgRatio > boxRatio
+                  then (fromIntegral cx, fromIntegral cx / imgRatio)
+                  else (fromIntegral cy * imgRatio, fromIntegral cy)
 
       (dimX', dimY') = (round dimX * 12700, round dimY * 12700) :: (Integer, Integer)
       (xoff, yoff) = (fromIntegral x + (fromIntegral cx - dimX) / 2,
                       fromIntegral y + (fromIntegral cy - dimY) / 2)
+
       (xoff', yoff') = (round xoff * 12700, round yoff * 12700) :: (Integer, Integer)
 
   let cNvPicPr = mknode "p:cNvPicPr" [] $
