@@ -36,7 +36,7 @@ module Text.Pandoc.Writers.Powerpoint.Presentation ( documentToPresentation
                                                    , Presentation(..)
                                                    , Slide(..)
                                                    , Layout(..)
-                                                   , Notes(..)
+                                                   , SpeakerNotes(..)
                                                    , SlideId(..)
                                                    , Shape(..)
                                                    , Graphic(..)
@@ -101,15 +101,15 @@ data WriterState = WriterState { stNoteIds :: M.Map Int [Block]
                                -- associate anchors with slide id
                                , stAnchorMap :: M.Map String SlideId
                                , stSlideIdSet :: S.Set SlideId
+                               , stSpeakerNotes :: Maybe [Paragraph]
                                , stLog :: [LogMessage]
-
                                } deriving (Show, Eq)
 
 instance Default WriterState where
   def = WriterState { stNoteIds = mempty
                     , stAnchorMap = mempty
-                    -- we reserve this s
                     , stSlideIdSet = reservedSlideIds
+                    , stSpeakerNotes = Nothing
                     , stLog = []
                     }
 
@@ -167,7 +167,7 @@ data Presentation = Presentation [Slide]
 
 data Slide = Slide { slideId :: SlideId
                    , slideLayout :: Layout
-                   , slideNotes :: (Maybe Notes)
+                   , slideSpeakerNotes :: (Maybe SpeakerNotes)
                    } deriving (Show, Eq)
 
 newtype SlideId = SlideId String
@@ -176,7 +176,7 @@ newtype SlideId = SlideId String
 -- In theory you could have anything on a notes slide but it seems
 -- designed mainly for one textbox, so we'll just put in the contents
 -- of that textbox, to avoid other shapes that won't work as well.
-newtype Notes = Notes [Paragraph]
+newtype SpeakerNotes = SpeakerNotes [Paragraph]
   deriving (Show, Eq)
 
 data Layout = MetadataSlide { metadataSlideTitle :: [ParaElem]
@@ -435,7 +435,13 @@ blockToParagraphs (DefinitionList entries) = do
         definition <- concatMapM (blockToParagraphs . BlockQuote) blksLst
         return $ term ++ definition
   concatMapM go entries
-blockToParagraphs (Div (_, ("notes" : []), _) _) = return []
+blockToParagraphs (Div (_, ("notes" : []), _) blks) = do
+  spNotes <- gets stSpeakerNotes
+  case spNotes of
+    Nothing -> do paras <- concat <$> mapM blockToParagraphs blks
+                  modify $ \st -> st{stSpeakerNotes = Just paras}
+                  return []
+    Just _  -> return []
 blockToParagraphs (Div _ blks)  = concatMapM blockToParagraphs blks
 blockToParagraphs blk = do
   addLogMessage $ BlockNotRendered blk
@@ -635,8 +641,12 @@ blocksToSlide' _ [] = do
 
 blocksToSlide :: [Block] -> Pres Slide
 blocksToSlide blks = do
+  -- empty speakerNotes state
+  modify $ \st -> st{stSpeakerNotes = Nothing}
   slideLevel <- asks envSlideLevel
-  blocksToSlide' slideLevel blks
+  sld <- blocksToSlide' slideLevel blks
+  speakerNoteParas <- gets stSpeakerNotes
+  return $ sld{slideSpeakerNotes = SpeakerNotes <$> speakerNoteParas}
 
 makeNoteEntry :: Int -> [Block] -> [Block]
 makeNoteEntry n blks =
@@ -778,11 +788,11 @@ applyToLayout f (TwoColumnSlide hdr contentL contentR) = do
 applyToSlide :: Monad m => (ParaElem -> m ParaElem) -> Slide -> m Slide
 applyToSlide f slide = do
   layout' <- applyToLayout f $ slideLayout slide
-  mbNotes' <- case slideNotes slide of
-                Just (Notes notes) -> (Just . Notes) <$>
-                                      mapM (applyToParagraph f) notes
+  mbNotes' <- case slideSpeakerNotes slide of
+                Just (SpeakerNotes notes) -> (Just . SpeakerNotes) <$>
+                                             mapM (applyToParagraph f) notes
                 Nothing -> return Nothing
-  return slide{slideLayout = layout', slideNotes = mbNotes'}
+  return slide{slideLayout = layout', slideSpeakerNotes = mbNotes'}
 
 replaceAnchor :: ParaElem -> Pres ParaElem
 replaceAnchor (Run rProps s)
