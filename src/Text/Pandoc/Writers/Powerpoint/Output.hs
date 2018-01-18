@@ -1145,7 +1145,16 @@ presentationToRels :: PandocMonad m => Presentation -> P m [Relationship]
 presentationToRels (Presentation slides) = do
   mySlideRels <- mapM slideToPresRel slides
   rels <- getRels
-  let relsWithoutSlides = filter (\r -> relType r /= "http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide") rels
+  let relsWithoutSlides = filter
+                          (\r -> relType r /= "http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide")
+                          rels
+  --  we're going to remove the notes entries for now. When we
+  --  implement notes, we'll keep it in base on whether there are
+  --  notes in the presentation.
+  let relsWithoutSlides' = filter
+                           (\r -> relType r /= "http://schemas.openxmlformats.org/officeDocument/2006/relationships/notesMaster")
+                           relsWithoutSlides
+
   -- We want to make room for the slides in the id space. The slides
   -- will start at Id2 (since Id1 is for the slide master). There are
   -- two slides in the data file, but that might change in the future,
@@ -1155,7 +1164,7 @@ presentationToRels (Presentation slides) = do
   -- 2. We add the difference between this and the number of slides to
   -- all relWithoutSlide rels (unless they're 1)
 
-  let minRelNotOne = case filter (1<) $ map relId relsWithoutSlides of
+  let minRelNotOne = case filter (1<) $ map relId relsWithoutSlides' of
         [] -> 0                 -- doesn't matter in this case, since
                                 -- there will be nothing to map the
                                 -- function over
@@ -1165,9 +1174,9 @@ presentationToRels (Presentation slides) = do
       modifyRelNum 1 = 1
       modifyRelNum n = n - minRelNotOne + 2 + length slides
 
-      relsWithoutSlides' = map (\r -> r{relId = modifyRelNum $ relId r}) relsWithoutSlides
+      relsWithoutSlides'' = map (\r -> r{relId = modifyRelNum $ relId r}) relsWithoutSlides'
 
-  return $ mySlideRels ++ relsWithoutSlides'
+  return $ mySlideRels ++ relsWithoutSlides''
 
 -- We make this ourselves, in case there's a thumbnail in the one from
 -- the template.
@@ -1299,13 +1308,14 @@ presentationToPresentationElement pres = do
   element <- parseXml refArchive distArchive "ppt/presentation.xml"
   sldIdLst <- presentationToSldIdLst pres
 
-  let modifySldIdLst :: Content -> Content
+  let modifySldIdLst :: Content -> Maybe Content
       modifySldIdLst (Elem e) = case elName e of
-        (QName "sldIdLst" _ _) -> Elem sldIdLst
-        _                      -> Elem e
-      modifySldIdLst ct = ct
+        (QName "sldIdLst" _ _) -> Just $ Elem sldIdLst
+        (QName "notesMasterIdLst" _ _) -> Nothing
+        _                      -> Just $ Elem e
+      modifySldIdLst ct = Just $ ct
 
-      newContent = map modifySldIdLst $ elContent element
+      newContent = mapMaybe modifySldIdLst $ elContent element
 
   return $ element{elContent = newContent}
 
