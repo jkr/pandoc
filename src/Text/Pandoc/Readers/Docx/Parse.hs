@@ -137,6 +137,8 @@ unwrapSDT ns (Elem element)
   | isElem ns "w" "sdt" element
   , Just sdtContent <- findChildByName ns "w" "sdtContent" element
   = concatMap (unwrapSDT ns) $ map Elem $ elChildren sdtContent
+  | isElem ns "w" "smartTag" element
+  = concatMap (unwrapSDT ns) $ map Elem $ elChildren element
 unwrapSDT _ content = [content]
 
 unwrapSDTchild :: NameSpaces -> Content -> Content
@@ -275,7 +277,6 @@ data ParPart = PlainRun Run
              | Drawing FilePath String String B.ByteString Extent -- title, alt
              | Chart                                              -- placeholder for now
              | PlainOMath [Exp]
-             | SmartTag [Run]
              | Field FieldInfo [Run]
              | NullParPart      -- when we need to return nothing, but
                                 -- not because of an error.
@@ -825,10 +826,6 @@ elemToParPart ns element
   | Just change <- getTrackedChange ns element = do
       runs <- mapD (elemToRun ns) (elChildren element)
       return $ ChangedRuns change runs
-elemToParPart ns element
-  | isElem ns "w" "smartTag" element = do
-    runs <- mapD (elemToRun ns) (elChildren element)
-    return $ SmartTag runs
 elemToParPart ns element
   | isElem ns "w" "bookmarkStart" element
   , Just bmId <- findAttrByName ns "w" "id" element
