@@ -112,7 +112,7 @@ data WriterState = WriterState { stNoteIds :: M.Map Int [Block]
                                , stAnchorMap :: M.Map String SlideId
                                , stSlideIdSet :: S.Set SlideId
                                , stLog :: [LogMessage]
-                               , stSpeakerNotesMap :: M.Map SlideId [[Paragraph]]
+                               , stSpeakerNotes :: Maybe SpeakerNotes
                                } deriving (Show, Eq)
 
 instance Default WriterState where
@@ -121,7 +121,7 @@ instance Default WriterState where
                     -- we reserve this s
                     , stSlideIdSet = reservedSlideIds
                     , stLog = []
-                    , stSpeakerNotesMap = mempty
+                    , stSpeakerNotes = Nothing
                     }
 
 metadataSlideId :: SlideId
@@ -561,22 +561,22 @@ isNotesDiv :: Block -> Bool
 isNotesDiv (Div (_, ["notes"], _) _) = True
 isNotesDiv _ = False
 
-handleNotes :: Block -> Pres ()
-handleNotes (Div (_, ["notes"], _) blks) =
-  local (\env -> env{envInSpeakerNotes=True}) $ do
-  sldId <- asks envCurSlideId
-  spkNotesMap <- gets stSpeakerNotesMap
-  paras <- concatMapM blockToParagraphs blks
-  let spkNotesMap' = case M.lookup sldId spkNotesMap of
-        Just lst -> M.insert sldId (paras : lst) spkNotesMap
-        Nothing  -> M.insert sldId [paras] spkNotesMap
-  modify $ \st -> st{stSpeakerNotesMap = spkNotesMap'}
-handleNotes _ = return ()
+handleNotes' :: Block -> Pres [Paragraph]
+handleNotes' (Div (_, ["notes"], _) blks) =
+  local (\env -> env{envInSpeakerNotes=True}) $
+  concatMapM blockToParagraphs blks
+handleNotes' _ = return []
+
+handleNotes :: [Block] -> Pres [Paragraph]
+handleNotes blks = concatMapM handleNotes' blks
 
 handleAndFilterNotes :: [Block] -> Pres [Block]
 handleAndFilterNotes blks = do
-  mapM_ handleNotes blks
-  return $ filter (not . isNotesDiv) blks
+  paras <- walkM handleNotes blks
+  modify $ \st -> if null paras
+                  then st{stSpeakerNotes = Nothing}
+                  else st{stSpeakerNotes = Just $ SpeakerNotes paras}
+  return $ walk (filter (not . isNotesDiv)) blks
 
 blocksToShapes :: [Block] -> Pres [Shape]
 blocksToShapes blks = combineShapes <$> mapM blockToShape blks
@@ -630,12 +630,6 @@ splitBlocks' cur acc (blk : blks) = splitBlocks' (cur ++ [blk]) acc blks
 
 splitBlocks :: [Block] -> Pres [[Block]]
 splitBlocks = splitBlocks' [] []
-
-getSpeakerNotes :: Pres (Maybe SpeakerNotes)
-getSpeakerNotes = do
-  sldId <- asks envCurSlideId
-  spkNtsMap <- gets stSpeakerNotesMap
-  return $ (SpeakerNotes . concat . reverse) <$> M.lookup sldId spkNtsMap
 
 blocksToSlide' :: Int -> [Block] -> Pres Slide
 blocksToSlide' lvl (Header n (ident, _, _) ils : blks)
@@ -708,9 +702,9 @@ blocksToSlide' _ [] = do
 blocksToSlide :: [Block] -> Pres Slide
 blocksToSlide blks = do
   slideLevel <- asks envSlideLevel
-  blks' <- walkM handleAndFilterNotes blks
+  blks' <- handleAndFilterNotes blks
+  spkNotes <- gets stSpeakerNotes
   sld <- blocksToSlide' slideLevel blks'
-  spkNotes <- getSpeakerNotes
   return $ sld{slideSpeakerNotes = spkNotes}
 
 makeNoteEntry :: Int -> [Block] -> [Block]
