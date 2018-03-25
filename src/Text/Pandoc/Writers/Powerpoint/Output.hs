@@ -734,11 +734,11 @@ paraElemToElement :: PandocMonad m => ParaElem -> P m Element
 paraElemToElement Break = return $ mknode "a:br" [] ()
 paraElemToElement (Run rpr s) = do
   let sizeAttrs = case rPropForceSize rpr of
-                    Just n -> [("sz", (show $ n * 100))]
-                    Nothing -> if rPropCode rpr
-                               -- hardcoded size for code for now
-                               then [("sz", "1800")]
-                               else []
+                    Just (FontPixels n) -> [("sz", (show $ n * 100))]
+                    _                   -> if rPropCode rpr
+                                           -- hardcoded size for code for now
+                                           then [("sz", "1800")]
+                                           else []
       attrs = sizeAttrs ++
         (if rPropBold rpr then [("b", "1")] else []) ++
         (if rPropItalics rpr then [("i", "1")] else []) ++

@@ -56,6 +56,7 @@ module Text.Pandoc.Writers.Powerpoint.Presentation ( documentToPresentation
                                                    , URL
                                                    , TeXString(..)
                                                    , LinkTarget(..)
+                                                   , FontSize(..)
                                                    ) where
 
 
@@ -173,6 +174,10 @@ concatMapM f xs   =  liftM concat (mapM f xs)
 
 type Pixels = Integer
 
+data FontSize = FontPixels Pixels
+              | FontPercentage Integer
+              deriving (Show, Eq)
+
 data Presentation = Presentation DocProps [Slide]
   deriving (Show)
 
@@ -288,7 +293,7 @@ data RunProps = RunProps { rPropBold :: Bool
                          , rLink :: Maybe LinkTarget
                          , rPropCode :: Bool
                          , rPropBlockQuote :: Bool
-                         , rPropForceSize :: Maybe Pixels
+                         , rPropForceSize :: Maybe FontSize
                          , rSolidFill :: Maybe Color
                          -- TODO: Make a full underline data type with
                          -- the different options.
@@ -394,11 +399,11 @@ registerAnchorId anchor = do
     modify $ \st -> st {stAnchorMap = M.insert anchor sldId anchorMap}
 
 -- Currently hardcoded, until I figure out how to make it dynamic.
-blockQuoteSize :: Pixels
-blockQuoteSize = 20
+blockQuoteSize :: FontSize
+blockQuoteSize = FontPixels 20
 
-noteSize :: Pixels
-noteSize = 18
+noteSize :: FontSize
+noteSize = FontPixels 18
 
 blockToParagraphs :: Block -> Pres [Paragraph]
 blockToParagraphs (Plain ils) = blockToParagraphs (Para ils)
@@ -654,7 +659,9 @@ blocksToSlide' _ (blk : blks) spkNotes
 blocksToSlide' _ (blk : blks) spkNotes = do
       inNoteSlide <- asks envInNoteSlide
       shapes <- if inNoteSlide
-                then forceFontSize noteSize $ blocksToShapes (blk : blks)
+                then local
+                     (\r -> r{envRunProps = (envRunProps r){rPropForceSize = Just noteSize}}) $
+                     blocksToShapes (blk : blks)
                 else blocksToShapes (blk : blks)
       sldId <- asks envCurSlideId
       return $
@@ -707,10 +714,10 @@ makeNoteEntry n blks =
       (Para ils : blks') -> (Para $ enum : Space : ils) : blks'
       _ -> Para [enum] : blks
 
-forceFontSize :: Pixels -> Pres a -> Pres a
-forceFontSize px x = do
-  rpr <- asks envRunProps
-  local (\r -> r {envRunProps = rpr{rPropForceSize = Just px}}) x
+-- forceFontSize :: Pixels -> Pres a -> Pres a
+-- forceFontSize px x = do
+--   rpr <- asks envRunProps
+--   local (\r -> r {envRunProps = rpr{rPropForceSize = Just px}}) x
 
 -- We leave these as blocks because we will want to include them in
 -- the TOC.
