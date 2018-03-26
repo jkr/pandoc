@@ -1,5 +1,6 @@
 {-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE PatternGuards #-}
+{-# LANGUAGE MultiWayIf #-}
 
 {-
 Copyright (C) 2017-2018 Jesse Rosenthal <jrosenthal@jhu.edu>
@@ -95,6 +96,52 @@ getPresentationSize refArchive distArchive = do
   (cx, _) <- listToMaybe $ reads cxS :: Maybe (Integer, String)
   (cy, _) <- listToMaybe $ reads cyS :: Maybe (Integer, String)
   return (cx `div` 12700, cy `div` 12700)
+
+data TxStyle = TxStyle StyleType [LevelStyle]
+             deriving (Show, Eq)
+
+data StyleType = BodyStyle
+               | TitleStyle
+               | OtherStyle
+               deriving (Show, Eq)
+
+data LevelStyle = LevelStyle { levelStyleLvl :: Int
+                             , levelStyleSize :: Pixels
+                             } deriving (Show, Eq)
+
+levelStyleNum :: NameSpaces -> Element -> Maybe Int
+levelStyleNum ns element = do
+  suf <- stripPrefix "lvl" $ qName $ elName element
+  (n, suf') <- listToMaybe $ reads suf
+  if suf' == "pPr" then return n else Nothing
+
+getLevelStyle :: NameSpaces -> Element -> Maybe LevelStyle
+getLevelStyle ns element = do
+  lvl <- levelStyleNum ns element
+  defRPr <- findChild (elemName ns "a" "defRPr") element
+  sz <- findAttr (QName "sz" Nothing Nothing) defRPr
+  (px,_) <- listToMaybe $ reads sz
+  return $ LevelStyle lvl px
+
+getTxStyle :: NameSpaces -> Element -> Maybe TxStyle
+getTxStyle ns element = do
+  styleType <- if | isElem ns "p" "titleStyle" element -> Just TitleStyle
+                  | isElem ns "p" "bodyStyle" element -> Just BodyStyle
+                  | isElem ns "p" "otherStyle" element -> Just OtherStyle
+                  | otherwise -> Nothing
+  let lvlStyles = mapMaybe (getLevelStyle ns) (elChildren element)
+  return $ TxStyle styleType lvlStyles
+
+getTxStyles :: Archive -> Archive -> [TxStyle]
+getTxStyles refArchive distArchive = fromMaybe [] $ do
+  let masterPath = "ppt/slideMasters/slideMaster1.xml"
+  entry <- findEntryByPath masterPath refArchive
+           `mplus`
+           findEntryByPath masterPath distArchive
+  masterElement <- parseXMLDoc $ UTF8.toStringLazy $ fromEntry entry
+  let ns = elemToNameSpaces masterElement
+  txStyles <- findChild (elemName ns "p" "txStyles") masterElement
+  return $ mapMaybe (getTxStyle ns) (elChildren txStyles)
 
 data WriterEnv = WriterEnv { envRefArchive :: Archive
                            , envDistArchive :: Archive

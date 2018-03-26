@@ -57,6 +57,7 @@ module Text.Pandoc.Writers.Powerpoint.Presentation ( documentToPresentation
                                                    , TeXString(..)
                                                    , LinkTarget(..)
                                                    , FontSize(..)
+                                                   , Pixels
                                                    ) where
 
 
