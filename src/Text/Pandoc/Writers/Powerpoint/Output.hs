@@ -365,9 +365,16 @@ getContentShape ns spTreeElem
         NormalContent | (sp : _) <- contentShapes -> return sp
         TwoColumnLeftContent | (sp : _) <- contentShapes -> return sp
         TwoColumnRightContent | (_ : sp : _) <- contentShapes -> return sp
-        _ -> throwError $
-             PandocSomeError $
-             "Could not find shape for Powerpoint content"
+        _ -> do
+          let contentShapes' = getShapesByPlaceHolderType ns spTreeElem (PHType "body")
+          case contentType of
+            NormalContent | (sp : _) <- contentShapes' -> return sp
+            TwoColumnLeftContent | (sp : _) <- contentShapes' -> return sp
+            TwoColumnRightContent | (_ : sp : _) <- contentShapes' -> return sp
+            _ ->
+              throwError $
+              PandocSomeError $
+              "Could not find shape for Powerpoint content"
 getContentShape _ _ = throwError $
                       PandocSomeError $
                       "Attempted to find content on non shapeTree"
